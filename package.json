@@ -1,0 +1,17 @@
+{
+  "name": "deltag",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm --filter @deltag/server build",
+    "build:web": "pnpm --filter @deltag/web build",
+    "dev": "pnpm --filter @deltag/server dev",
+    "dev:web": "pnpm --filter @deltag/web dev",
+    "dev:all": "pnpm -r --parallel --filter @deltag/server --filter @deltag/web dev",
+    "test": "pnpm --filter @deltag/server test",
+    "lint": "pnpm --filter @deltag/server lint",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  }
+}
