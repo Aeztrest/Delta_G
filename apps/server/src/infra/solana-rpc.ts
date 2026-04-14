@@ -73,6 +73,20 @@ export class SolanaRpcAdapter {
     });
   }
 
+  async getAddressLookupTable(
+    accountKey: PublicKey,
+  ): Promise<{ addresses: PublicKey[] } | null> {
+    return withTimeoutRetryOnce(async () => {
+      try {
+        const result = await this.connection.getAddressLookupTable(accountKey);
+        if (!result.value) return null;
+        return { addresses: result.value.state.addresses };
+      } catch (e) {
+        throw mapRpcError(e);
+      }
+    });
+  }
+
   async pingRpc(): Promise<void> {
     return withTimeoutRetryOnce(async () => {
       try {

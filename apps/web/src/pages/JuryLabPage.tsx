@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { loadApiKey } from "../lib/storage.js";
+import { useApiKey } from "../context/ApiKeyContext.js";
 import { generateUnsignedDevnetSampleTx } from "../lib/sampleTx.js";
 
 export type ScenarioRun = {
@@ -48,29 +48,29 @@ async function runScenario(
     bodyJson = null;
   }
   const headers = responseHeaders(r);
-  let summary = `HTTP ${r.status} · ${bodyText.length} bayt`;
+  let summary = `HTTP ${r.status} · ${bodyText.length} bytes`;
   let interpretation = "";
 
   if (r.status === 200) {
     interpretation =
-      "Başarılı yanıt. İçerik tipine göre sağlık veya analiz sonucu dönmüş olmalı.";
+      "Successful response — health, readiness, or analyze JSON as applicable.";
   } else if (r.status === 400) {
     interpretation =
-      "İstek gövdesi veya işlem geçersiz — Zod / decode hatası. Beklenen demo davranışı.";
+      "Invalid body or transaction — expected for the missing-field scenario.";
   } else if (r.status === 401) {
     interpretation =
-      "API anahtarı eksik veya hatalı. Sunucu x402-only değilse önce anahtar gerekir.";
+      "Missing or invalid API key when the server requires Bearer auth.";
   } else if (r.status === 402) {
     const payHdrs = paymentRelatedHeaders(headers);
     interpretation =
-      "HTTP 402: Ödeme gerekli (x402). Aşağıda ödeme / protokolle ilgili başlıklar vurgulanır. İstemci ödeme kanıtı ile tekrar dener.";
-    if (payHdrs.length) summary += ` · ${payHdrs.length} ödeme başlığı`;
+      "HTTP 402 Payment Required — inspect payment / x402 headers below. Client must satisfy facilitator flow.";
+    if (payHdrs.length) summary += ` · ${payHdrs.length} payment header(s)`;
   } else if (r.status === 502 || r.status === 504) {
-    interpretation = "RPC veya ağ zaman aşımı / facilitator hatası olabilir.";
+    interpretation = "Upstream RPC timeout or facilitator error possible.";
   } else if (r.status === 503) {
-    interpretation = "Hazırlık kontrolü: RPC veya yapılandırma eksik olabilir.";
+    interpretation = "Readiness failure — RPC or optional facilitator not ready.";
   } else {
-    interpretation = "Yanıt kodunu ve gövdeyi inceleyin.";
+    interpretation = "Review status and body.";
   }
 
   return {
@@ -87,7 +87,39 @@ async function runScenario(
   };
 }
 
+const SCENARIOS = [
+  { id: "health" as const, method: "GET", path: "/health", hint: "Liveness" },
+  { id: "ready" as const, method: "GET", path: "/health/ready", hint: "RPC + optional x402 ready" },
+  {
+    id: "bad400" as const,
+    method: "POST",
+    path: "/v1/analyze",
+    hint: "Missing transactionBase64",
+    badge: "400",
+    tone: "tertiary" as const,
+  },
+  {
+    id: "noauth" as const,
+    method: "POST",
+    path: "/v1/analyze",
+    hint: "No Authorization header",
+    badge: "401/402",
+    tone: "error" as const,
+  },
+  {
+    id: "happy" as const,
+    method: "POST",
+    path: "/v1/analyze",
+    hint: "Bearer + sample devnet tx",
+    badge: "200",
+    tone: "primary" as const,
+  },
+];
+
 export function JuryLabPage() {
+  const { apiKey } = useApiKey();
+  const effectiveKey = () => apiKey.trim() || "docker-demo-key";
+
   const [runs, setRuns] = useState<ScenarioRun[]>([]);
   const [loading, setLoading] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -104,27 +136,27 @@ export function JuryLabPage() {
       let run: Omit<ScenarioRun, "runId">;
       switch (id) {
         case "health":
-          run = await runScenario("health", "Canlılık", "GET /health", () =>
+          run = await runScenario("health", "Liveness", "GET /health", () =>
             fetch("/health", { headers: { Accept: "application/json" } }),
           );
           break;
         case "ready":
-          run = await runScenario("ready", "Hazırlık", "GET /health/ready", () =>
+          run = await runScenario("ready", "Readiness", "GET /health/ready", () =>
             fetch("/health/ready", { headers: { Accept: "application/json" } }),
           );
           break;
         case "bad400":
           run = await runScenario(
             "bad400",
-            "Doğrulama hatası",
-            "POST /v1/analyze — eksik transactionBase64",
+            "Validation error",
+            "POST /v1/analyze — missing transactionBase64",
             () =>
               fetch("/v1/analyze", {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
                   Accept: "application/json",
-                  Authorization: `Bearer ${loadApiKey() || "docker-demo-key"}`,
+                  Authorization: `Bearer ${effectiveKey()}`,
                 },
                 body: JSON.stringify({ cluster: "devnet" }),
               }),
@@ -133,8 +165,8 @@ export function JuryLabPage() {
         case "noauth":
           run = await runScenario(
             "noauth",
-            "Anahtarsız erişim",
-            "POST — Authorization yok, geçerli gövde → 401 veya 402 (x402-only)",
+            "Unauthenticated",
+            "POST — no Authorization, valid body",
             async () => {
               const { base64 } = await generateUnsignedDevnetSampleTx();
               return fetch("/v1/analyze", {
@@ -152,10 +184,10 @@ export function JuryLabPage() {
         case "happy":
           run = await runScenario(
             "happy",
-            "Tam analiz (anahtarlı)",
-            "POST /v1/analyze + kayıtlı API key",
+            "Full analyze",
+            "POST /v1/analyze + API key + sample tx",
             async () => {
-              const key = loadApiKey() || "docker-demo-key";
+              const key = effectiveKey();
               const { base64 } = await generateUnsignedDevnetSampleTx();
               return fetch("/v1/analyze", {
                 method: "POST",
@@ -191,131 +223,205 @@ export function JuryLabPage() {
   const active = runs.find((r) => r.runId === selected) ?? runs[0];
 
   return (
-    <div className="jury-lab">
-      <header className="page-head">
-        <h1>Jüri laboratuvarı</h1>
-        <p className="lede">
-          Canlı sunucuya tek tıkla senaryolar. Özellikle <strong>HTTP 402</strong> ve x402 başlıkları
-          jüri demosunda protokolün “ödeme beklentisi” anını gösterir. Sunucu yalnızca API anahtarı
-          istiyorsa <code>x402probe</code> ve <code>noauth</code> <strong>401</strong> döner — o
-          zaman ortamda <code>X402_ENABLED=true</code> ve uygun <code>DELTAG_AUTH_MODE</code>{" "}
-          gerekir.
-        </p>
+    <div className="mx-auto max-w-7xl flex-1 space-y-8 p-6 md:p-8">
+      <header className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <span className="rounded bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-tighter text-primary">
+              Lab environment
+            </span>
+            <span className="font-mono text-xs text-on-surface-variant opacity-60">#DELTAG-JURY</span>
+          </div>
+          <h1 className="font-headline text-3xl font-bold tracking-tight text-on-surface md:text-4xl">
+            Jury lab
+          </h1>
+          <p className="mt-2 max-w-2xl font-body text-on-surface-variant">
+            Run canned requests against the live server. Use <strong className="text-on-surface">402</strong>{" "}
+            scenarios when <code className="text-primary/90">X402_ENABLED</code> and auth mode allow payment
+            challenges; otherwise expect <strong className="text-on-surface">401</strong> for unauthenticated
+            calls.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={loading !== null}
+          onClick={runAll}
+          className="group flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-bold tracking-tight text-on-primary transition-all hover:shadow-[0_0_20px_rgba(143,245,255,0.3)] active:scale-95 disabled:opacity-40"
+        >
+          <span className="material-symbols-outlined text-lg transition-transform duration-500 group-hover:rotate-180">
+            play_circle
+          </span>
+          Run all scenarios
+        </button>
       </header>
 
-      <div className="card jury-actions">
-        <button type="button" className="secondary" disabled={loading !== null} onClick={runAll}>
-          Tüm senaryoları sırayla çalıştır
-        </button>
-      </div>
-
-      <div className="scenario-grid">
-        {(
-          [
-            ["health", "Canlılık", "/health"],
-            ["ready", "Hazırlık", "/health/ready"],
-            ["bad400", "400 doğrulama", "Eksik gövde + anahtar"],
-            ["noauth", "401 / 402", "Anahtarsız — x402-only ise 402"],
-            ["happy", "200 analiz", "Anahtar + örnek tx"],
-          ] as const
-        ).map(([id, t, d]) => (
-          <button
-            key={id}
-            type="button"
-            className={`scenario-card ${loading === id ? "loading" : ""}`}
-            disabled={loading !== null}
-            onClick={() => runOne(id)}
-          >
-            <span className="sc-title">{t}</span>
-            <span className="sc-desc">{d}</span>
-            {loading === id ? <span className="sc-spin">…</span> : null}
-          </button>
-        ))}
-      </div>
-
-      {active ? (
-        <section className="card jury-result">
-          <div className="jury-result-head">
-            <h2 className="card-title">{active.title}</h2>
-            <span
-              className={`status-pill ${
-                active.status === 200
-                  ? "ok"
-                  : active.status === 402
-                    ? "pay"
-                    : active.status === 400 || active.status === 401
-                      ? "warn"
-                      : "err"
-              }`}
-            >
-              HTTP {active.status}
-            </span>
-            <span className="timing">{active.durationMs} ms</span>
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+        <section className="flex flex-col gap-6 lg:col-span-4">
+          <div className="rounded-xl border-l-2 border-primary/20 bg-surface-container-low p-6">
+            <h2 className="mb-6 text-xs font-bold uppercase tracking-[0.2em] text-primary-fixed-dim">
+              Execution scenarios
+            </h2>
+            <div className="flex flex-col gap-3">
+              {SCENARIOS.map((s) => {
+                const isLoad = loading === s.id;
+                const hasBadge = "badge" in s;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    disabled={loading !== null}
+                    onClick={() => runOne(s.id)}
+                    className="w-full text-left"
+                  >
+                    <div
+                      className={`flex items-center justify-between rounded-lg border p-4 transition-all ${
+                        hasBadge && s.tone === "error"
+                          ? "border-error/20 bg-surface-container-high ring-1 ring-error/10 hover:border-error/40"
+                          : hasBadge && s.tone === "tertiary"
+                            ? "border-tertiary/20 bg-surface-container-high ring-1 ring-tertiary/10 hover:border-tertiary/40"
+                            : hasBadge && s.tone === "primary"
+                              ? "border-primary/20 bg-surface-container-high ring-1 ring-primary/10 hover:border-primary/40"
+                              : "border-transparent bg-surface-container hover:border-primary/30 hover:bg-surface-variant"
+                      } ${isLoad ? "opacity-70" : ""}`}
+                    >
+                      <div className="flex flex-col">
+                        <span className="mb-1 font-mono text-[10px] text-primary/70">{s.method}</span>
+                        <span className="font-headline text-sm font-semibold">{s.path}</span>
+                        {"hint" in s && s.hint ? (
+                          <span className="mt-1 text-[9px] text-on-surface-variant">{s.hint}</span>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {hasBadge ? (
+                          <span
+                            className={`rounded px-2 py-1 text-[10px] font-bold ${
+                              s.tone === "error"
+                                ? "bg-error/10 text-error"
+                                : s.tone === "tertiary"
+                                  ? "bg-tertiary/10 text-tertiary"
+                                  : "bg-primary/10 text-primary"
+                            }`}
+                          >
+                            {s.badge}
+                          </span>
+                        ) : null}
+                        <span className="material-symbols-outlined text-on-surface-variant transition-colors group-hover:text-primary">
+                          chevron_right
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <p className="hint">{active.subtitle}</p>
-          <p className="interpret">{active.interpretation}</p>
-          <p className="summary-line">{active.summary}</p>
+        </section>
 
-          {paymentRelatedHeaders(active.headers).length > 0 ? (
-            <div className="pay-hl">
-              <h3>Ödeme / x402 başlıkları</h3>
-              <table className="hdr-table">
-                <tbody>
-                  {paymentRelatedHeaders(active.headers).map(([k, v]) => (
-                    <tr key={k}>
-                      <th>{k}</th>
-                      <td>
-                        <code>{v.length > 200 ? `${v.slice(0, 200)}…` : v}</code>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <section className="space-y-6 lg:col-span-8">
+          {active ? (
+            <div className="rounded-xl border border-outline-variant/10 bg-surface-container p-6 md:p-8">
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <h2 className="font-headline text-xl font-bold text-on-surface">{active.title}</h2>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-bold ${
+                    active.status === 200
+                      ? "bg-primary/15 text-primary"
+                      : active.status === 402
+                        ? "bg-secondary/15 text-secondary"
+                        : active.status === 400 || active.status === 401
+                          ? "bg-tertiary/15 text-tertiary"
+                          : "bg-error/15 text-error"
+                  }`}
+                >
+                  HTTP {active.status}
+                </span>
+                <span className="text-sm text-on-surface-variant">{active.durationMs} ms</span>
+              </div>
+              <p className="text-xs text-on-surface-variant">{active.subtitle}</p>
+              <p className="mt-3 text-sm text-on-surface">{active.interpretation}</p>
+              <p className="mt-2 text-xs text-on-surface-variant">{active.summary}</p>
+
+              {paymentRelatedHeaders(active.headers).length > 0 ? (
+                <div className="mt-6 rounded-lg border border-secondary/30 bg-secondary/5 p-4">
+                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-secondary">
+                    Payment / x402 headers
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[11px]">
+                      <tbody>
+                        {paymentRelatedHeaders(active.headers).map(([k, v]) => (
+                          <tr key={k}>
+                            <th className="align-top py-1 pr-3 font-medium text-on-surface-variant">{k}</th>
+                            <td className="break-all font-mono text-on-surface">
+                              {v.length > 220 ? `${v.slice(0, 220)}…` : v}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              <details className="mt-6" open>
+                <summary className="cursor-pointer font-headline text-xs font-bold uppercase tracking-wider text-primary">
+                  All response headers
+                </summary>
+                <div className="custom-scrollbar mt-3 max-h-48 overflow-auto rounded-lg bg-surface-container-low p-3">
+                  <table className="w-full text-left text-[11px]">
+                    <tbody>
+                      {Object.entries(active.headers).map(([k, v]) => (
+                        <tr key={k}>
+                          <th className="align-top py-1 pr-3 text-on-surface-variant">{k}</th>
+                          <td className="break-all font-mono">{v.length > 120 ? `${v.slice(0, 120)}…` : v}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+
+              <h3 className="mt-6 font-headline text-xs font-bold uppercase tracking-wider text-on-surface-variant">
+                Body
+              </h3>
+              <pre className="custom-scrollbar mt-2 max-h-[min(420px,50vh)] overflow-auto rounded-lg bg-surface-container-lowest p-4 font-mono text-xs text-on-surface">
+                {active.bodyJson
+                  ? JSON.stringify(active.bodyJson, null, 2)
+                  : active.bodyText}
+              </pre>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-outline-variant/25 p-10 text-center text-on-surface-variant">
+              Run a scenario to inspect responses, timings, and headers.
+            </div>
+          )}
+
+          {runs.length > 1 ? (
+            <div className="rounded-xl bg-surface-container-low p-6">
+              <h3 className="mb-3 font-headline text-xs font-bold uppercase tracking-wider text-primary-fixed-dim">
+                History ({runs.length})
+              </h3>
+              <ul className="space-y-2 text-sm">
+                {runs.map((r) => (
+                  <li key={r.runId}>
+                    <button
+                      type="button"
+                      className="text-left text-primary hover:underline"
+                      onClick={() => setSelected(r.runId)}
+                    >
+                      {r.title}
+                    </button>
+                    <span className="text-on-surface-variant">
+                      {" "}
+                      — HTTP {r.status} — {r.durationMs}ms
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
-
-          <details open>
-            <summary>Tüm yanıt başlıkları</summary>
-            <table className="hdr-table">
-              <tbody>
-                {Object.entries(active.headers).map(([k, v]) => (
-                  <tr key={k}>
-                    <th>{k}</th>
-                    <td>
-                      <code>{v.length > 160 ? `${v.slice(0, 160)}…` : v}</code>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
-
-          <h3 className="subsection-title">Gövde</h3>
-          <pre className="out">
-            {active.bodyJson
-              ? JSON.stringify(active.bodyJson, null, 2)
-              : active.bodyText}
-          </pre>
         </section>
-      ) : (
-        <p className="hint card">Senaryo çalıştırın; sonuç burada görünür.</p>
-      )}
-
-      {runs.length > 1 ? (
-        <div className="card">
-          <h3 className="subsection-title">Geçmiş ({runs.length})</h3>
-          <ul className="run-history">
-            {runs.map((r) => (
-              <li key={r.runId}>
-                <button type="button" className="linkish" onClick={() => setSelected(r.runId)}>
-                  {r.title}
-                </button>{" "}
-                — {r.status} — {r.durationMs}ms
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      </div>
     </div>
   );
 }

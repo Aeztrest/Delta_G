@@ -7,6 +7,10 @@ import { fastifyLoggerOptions } from "./infra/logger.js";
 import { SolanaRpcAdapter } from "./infra/solana-rpc.js";
 import { registerAnalyzeRoute } from "./api/routes/analyze.js";
 import { registerHealthRoutes } from "./api/routes/health.js";
+import { registerMcpRoutes } from "./api/routes/mcp.js";
+import { registerBatchRoute } from "./api/routes/batch.js";
+import { registerAuditRoutes } from "./api/routes/audit.js";
+import { registerReplayRoute } from "./api/routes/replay.js";
 import { apiError } from "./api/errors.js";
 import { createDeltagX402 } from "./infra/x402.js";
 
@@ -82,7 +86,12 @@ export async function buildApp(config: AppConfig) {
     x402 ? { checkX402Facilitator: x402.checkFacilitator } : undefined,
   );
 
-  registerAnalyzeRoute(app, { config, createRpc }, x402);
+  const analyzeDeps = { config, createRpc };
+  registerAnalyzeRoute(app, analyzeDeps, x402);
+  registerBatchRoute(app, analyzeDeps);
+  registerMcpRoutes(app, analyzeDeps);
+  registerAuditRoutes(app);
+  registerReplayRoute(app, analyzeDeps);
 
   return app;
 }

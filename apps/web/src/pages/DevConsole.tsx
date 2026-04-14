@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
-import { API_KEY_STORAGE, loadApiKey, saveApiKey } from "../lib/storage.js";
+import { useApiKey } from "../context/ApiKeyContext.js";
+import { API_KEY_STORAGE } from "../lib/storage.js";
 import { generateUnsignedDevnetSampleTx } from "../lib/sampleTx.js";
 import type { Cluster } from "../lib/types.js";
 
@@ -47,8 +48,21 @@ const defaultPolicy = () => ({
   requireSuccessfulSimulation: false,
 });
 
+const POLICY_CHECKS: {
+  key: keyof ReturnType<typeof defaultPolicy>;
+  label: string;
+  sub: string;
+}[] = [
+  { key: "blockApprovalChanges", label: "Block approval changes", sub: "Token allow / revoke" },
+  { key: "blockDelegateChanges", label: "Block delegate changes", sub: "Stake / vote" },
+  { key: "blockRiskyPrograms", label: "Block risky programs", sub: "Known risk list" },
+  { key: "blockUnknownProgramExposure", label: "Block unknown programs", sub: "Strict exposure" },
+  { key: "allowWarnings", label: "Allow warnings", sub: "Policy may pass with warnings" },
+  { key: "requireSuccessfulSimulation", label: "Require successful simulation", sub: "Fail if sim errors" },
+];
+
 export function DevConsole() {
-  const [apiKey, setApiKey] = useState(() => loadApiKey());
+  const { apiKey, setApiKey, persistKey } = useApiKey();
   const [tab, setTab] = useState<FormTab>("form");
   const [cluster, setCluster] = useState<Cluster>("devnet");
   const [txB64, setTxB64] = useState("");
@@ -69,10 +83,6 @@ export function DevConsole() {
   const [analyzeOut, setAnalyzeOut] = useState("");
   const [status, setStatus] = useState<number | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
-
-  const persistKey = useCallback(() => {
-    saveApiKey(apiKey);
-  }, [apiKey]);
 
   const headers = useMemo(() => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -192,13 +202,14 @@ export function DevConsole() {
         JSON.stringify(
           {
             _note:
-              "İmzasız örnek işlem. Simülasyon çoğu zaman başarısız olur; decode + pipeline testi içindir.",
+              "Unsigned sample tx — simulation often fails; useful for decode / pipeline checks.",
             feePayer,
           },
           null,
           2,
         ),
       );
+      setStatus(null);
     } catch (e) {
       setAnalyzeOut(e instanceof Error ? e.message : String(e));
     } finally {
@@ -206,249 +217,337 @@ export function DevConsole() {
     }
   };
 
-  const badge =
-    status === null ? null : status >= 200 && status < 300 ? (
-      <span className="badge ok">{status}</span>
-    ) : status === 400 || status === 401 ? (
-      <span className="badge warn">{status}</span>
-    ) : (
-      <span className="badge err">{status}</span>
-    );
+  const copyOut = useCallback(() => {
+    if (analyzeOut) void navigator.clipboard.writeText(analyzeOut);
+  }, [analyzeOut]);
 
   const pageOrigin = typeof window !== "undefined" ? window.location.origin : "";
 
-  return (
-    <>
-      <header className="page-head">
-        <h1>Geliştirici konsolu</h1>
-        <p className="lede">
-          Ham istekler, policy alanları ve JSON. Tarayıcı: <code>{pageOrigin || "—"}</code> ·
-          Depolama anahtarı: <code>{API_KEY_STORAGE}</code>
-        </p>
-      </header>
+  const statusBadge =
+    status === null ? null : status >= 200 && status < 300 ? (
+      <span className="rounded bg-primary/10 px-2 py-0.5 text-[9px] text-[#00F0FF]">HTTP {status}</span>
+    ) : (
+      <span className="rounded bg-error/10 px-2 py-0.5 text-[9px] text-error">HTTP {status}</span>
+    );
 
-      <details className="card">
-        <summary>API özeti</summary>
-        <div className="card-body">
-          <p>
-            <code>/health</code>, <code>/health/ready</code>, <code>POST /v1/analyze</code> göreli
-            yollarla proxy edilir.
+  return (
+    <div className="min-h-[calc(100vh-4rem)] bg-surface">
+      <div className="mx-auto max-w-6xl p-6 md:p-8">
+        <div className="mb-8">
+          <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-widest text-on-surface-variant">
+            <span>Terminal</span>
+            <span className="material-symbols-outlined text-[12px]">chevron_right</span>
+            <span className="text-primary">Console</span>
+          </div>
+          <h1 className="font-headline text-3xl font-bold tracking-tight text-on-surface md:text-4xl">
+            Developer console
+          </h1>
+          <p className="mt-2 max-w-2xl text-on-surface-variant">
+            Call{" "}
+            <code className="rounded bg-surface-container-high px-1 text-primary">POST /v1/analyze</code> with
+            full policy control. Origin <code className="text-primary/80">{pageOrigin || "—"}</code> · key
+            storage <code className="text-primary/80">{API_KEY_STORAGE}</code>
           </p>
         </div>
-      </details>
 
-      <section className="card">
-        <h2 className="card-title">Kimlik doğrulama</h2>
-        <p className="hint">
-          Docker varsayılan: <code>docker-demo-key</code>
-        </p>
-        <div className="row">
-          <input
-            type="password"
-            placeholder="API key (Bearer)"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            className="input-grow"
-          />
-          <button type="button" className="secondary" onClick={persistKey}>
-            Kaydet
-          </button>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Sağlık</h2>
-        <div className="row">
-          <button type="button" disabled={loading !== null} onClick={runHealth}>
+        <div className="mb-6 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={loading !== null}
+            onClick={runHealth}
+            className="rounded-lg border border-outline-variant/20 bg-surface-container px-4 py-2 text-xs font-bold uppercase tracking-wider text-on-surface hover:border-primary/30 disabled:opacity-40"
+          >
             GET /health
           </button>
-          <button type="button" disabled={loading !== null} onClick={runReady}>
+          <button
+            type="button"
+            disabled={loading !== null}
+            onClick={runReady}
+            className="rounded-lg border border-outline-variant/20 bg-surface-container px-4 py-2 text-xs font-bold uppercase tracking-wider text-on-surface hover:border-primary/30 disabled:opacity-40"
+          >
             GET /health/ready
           </button>
         </div>
-        {healthOut ? (
-          <>
-            <h3 className="subsection-title">/health</h3>
-            <pre className="out">{healthOut}</pre>
-          </>
-        ) : null}
-        {readyOut ? (
-          <>
-            <h3 className="subsection-title">/health/ready</h3>
-            <pre className="out">{readyOut}</pre>
-          </>
-        ) : null}
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Senaryolar (hızlı doldur)</h2>
-        <div className="btn-wrap">
-          <button type="button" className="secondary" onClick={() => applyPreset("missing_fields")}>
-            Eksik gövde
-          </button>
-          <button type="button" className="secondary" onClick={() => applyPreset("empty_tx")}>
-            Boş tx
-          </button>
-          <button type="button" className="secondary" onClick={() => applyPreset("invalid_b64")}>
-            Geçersiz base64
-          </button>
-          <button type="button" className="secondary" onClick={() => applyPreset("random_b64")}>
-            Rastgele base64
-          </button>
-          <button type="button" className="secondary" onClick={() => applyPreset("strict_sim")}>
-            Policy: sim zorunlu
-          </button>
-          <button type="button" className="secondary" onClick={() => applyPreset("permissive")}>
-            Policy: uyarı OK
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={loading !== null}
-            onClick={generateUnsignedDevnetTx}
-          >
-            Devnet örnek tx üret
-          </button>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">POST /v1/analyze</h2>
-        <div className="tabs">
-          <button
-            type="button"
-            className={tab === "form" ? "active" : ""}
-            onClick={() => setTab("form")}
-          >
-            Form
-          </button>
-          <button
-            type="button"
-            className={tab === "raw" ? "active" : ""}
-            onClick={() => setTab("raw")}
-          >
-            Ham JSON
-          </button>
-        </div>
-
-        {tab === "form" ? (
-          <>
-            <div className="row">
-              <label>Cluster</label>
-              <select
-                value={cluster}
-                onChange={(e) => setCluster(e.target.value as Cluster)}
-                className="input-narrow"
-              >
-                <option value="devnet">devnet</option>
-                <option value="testnet">testnet</option>
-                <option value="mainnet-beta">mainnet-beta</option>
-              </select>
-            </div>
-            <label>transactionBase64</label>
-            <textarea
-              className="mono"
-              value={txB64}
-              onChange={(e) => setTxB64(e.target.value)}
-            />
-            <div className="grid-2">
-              <div>
-                <label>userWallet</label>
-                <input
-                  type="text"
-                  value={userWallet}
-                  onChange={(e) => setUserWallet(e.target.value)}
-                />
-              </div>
-              <div>
-                <label>integratorRequestId</label>
-                <input
-                  type="text"
-                  value={integratorRequestId}
-                  onChange={(e) => setIntegratorRequestId(e.target.value)}
-                />
-              </div>
-            </div>
-            <h3 className="subsection-title">Policy</h3>
-            <div className="policy-grid">
-              {(
-                [
-                  ["blockApprovalChanges", policy.blockApprovalChanges],
-                  ["blockDelegateChanges", policy.blockDelegateChanges],
-                  ["blockRiskyPrograms", policy.blockRiskyPrograms],
-                  ["blockUnknownProgramExposure", policy.blockUnknownProgramExposure],
-                  ["allowWarnings", policy.allowWarnings],
-                  ["requireSuccessfulSimulation", policy.requireSuccessfulSimulation],
-                ] as const
-              ).map(([k, v]) => (
-                <label key={k}>
-                  <input
-                    type="checkbox"
-                    checked={v}
-                    onChange={(e) =>
-                      setPolicy((p) => ({ ...p, [k]: e.target.checked }))
-                    }
-                  />
-                  {k}
-                </label>
-              ))}
-            </div>
-            <div className="grid-2" style={{ marginTop: "0.75rem" }}>
-              <div>
-                <label>maxLossPercent</label>
-                <input
-                  type="number"
-                  value={policy.maxLossPercent}
-                  onChange={(e) =>
-                    setPolicy((p) => ({ ...p, maxLossPercent: e.target.value }))
-                  }
-                />
-              </div>
-              <div>
-                <label>minPostUsdcBalance</label>
-                <input
-                  type="number"
-                  value={policy.minPostUsdcBalance}
-                  onChange={(e) =>
-                    setPolicy((p) => ({ ...p, minPostUsdcBalance: e.target.value }))
-                  }
-                />
-              </div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label>minPostTokenMint</label>
-                <input
-                  type="text"
-                  value={policy.minPostTokenMint}
-                  onChange={(e) =>
-                    setPolicy((p) => ({ ...p, minPostTokenMint: e.target.value }))
-                  }
-                />
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <textarea
-              className="mono tall"
-              value={rawJson}
-              onChange={(e) => setRawJson(e.target.value)}
-            />
-          </>
+        {(healthOut || readyOut) && (
+          <div className="mb-8 grid gap-4 md:grid-cols-2">
+            {healthOut ? (
+              <pre className="custom-scrollbar max-h-40 overflow-auto rounded-xl bg-surface-container-low p-4 font-mono text-[11px] text-on-surface">
+                {healthOut}
+              </pre>
+            ) : null}
+            {readyOut ? (
+              <pre className="custom-scrollbar max-h-40 overflow-auto rounded-xl bg-surface-container-low p-4 font-mono text-[11px] text-on-surface">
+                {readyOut}
+              </pre>
+            ) : null}
+          </div>
         )}
 
-        <div className="row" style={{ marginTop: "1rem" }}>
-          <button type="button" disabled={loading !== null} onClick={runAnalyze}>
-            Analyze gönder
-          </button>
-          {badge}
+        <div className="mb-6 rounded-xl border border-outline-variant/10 bg-surface-container p-6">
+          <h2 className="mb-2 font-headline text-xs font-bold uppercase tracking-widest text-on-surface-variant">
+            Authentication
+          </h2>
+          <p className="mb-3 text-xs text-on-surface-variant">Docker default: docker-demo-key</p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              className="min-w-[200px] flex-1 rounded-lg border-none bg-surface-container-high py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary"
+              placeholder="API key (Bearer)"
+            />
+            <button
+              type="button"
+              onClick={persistKey}
+              className="rounded-lg bg-primary px-4 py-3 text-xs font-bold uppercase tracking-wider text-on-primary"
+            >
+              Save
+            </button>
+          </div>
         </div>
-        {analyzeOut ? (
-          <>
-            <h3 className="subsection-title">Yanıt</h3>
-            <pre className="out">{analyzeOut}</pre>
-          </>
-        ) : null}
-      </section>
-    </>
+
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+          <div className="flex flex-col gap-6 lg:col-span-7">
+            <div className="w-fit rounded-xl bg-surface-container-low p-1">
+              <button
+                type="button"
+                onClick={() => setTab("form")}
+                className={`inline-flex items-center gap-2 rounded-lg px-6 py-2 text-sm font-medium transition-colors ${
+                  tab === "form"
+                    ? "bg-surface-container-highest text-primary"
+                    : "text-on-surface-variant hover:text-on-surface"
+                }`}
+              >
+                <span className="material-symbols-outlined text-sm">dynamic_form</span>
+                Form mode
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("raw")}
+                className={`inline-flex items-center gap-2 rounded-lg px-6 py-2 text-sm font-medium transition-colors ${
+                  tab === "raw"
+                    ? "bg-surface-container-highest text-primary"
+                    : "text-on-surface-variant hover:text-on-surface"
+                }`}
+              >
+                <span className="material-symbols-outlined text-sm">data_object</span>
+                Raw JSON
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-outline-variant/5 bg-surface-container p-6 shadow-xl md:p-8">
+              {tab === "form" ? (
+                <>
+                  <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        User wallet (optional)
+                      </label>
+                      <input
+                        value={userWallet}
+                        onChange={(e) => setUserWallet(e.target.value)}
+                        className="w-full rounded-lg border-none bg-surface-container-high py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary"
+                        placeholder="Solana pubkey"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                        Integrator request id
+                      </label>
+                      <input
+                        value={integratorRequestId}
+                        onChange={(e) => setIntegratorRequestId(e.target.value)}
+                        className="w-full rounded-lg border-none bg-surface-container-high py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary"
+                        placeholder="opaque string"
+                      />
+                    </div>
+                  </div>
+                  <div className="mb-6 space-y-2">
+                    <label className="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                      Cluster
+                    </label>
+                    <select
+                      value={cluster}
+                      onChange={(e) => setCluster(e.target.value as Cluster)}
+                      className="w-full max-w-xs rounded-lg border-none bg-surface-container-high py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="devnet">devnet</option>
+                      <option value="testnet">testnet</option>
+                      <option value="mainnet-beta">mainnet-beta</option>
+                    </select>
+                  </div>
+                  <div className="mb-8 space-y-2">
+                    <label className="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                      transactionBase64
+                    </label>
+                    <textarea
+                      value={txB64}
+                      onChange={(e) => setTxB64(e.target.value)}
+                      rows={8}
+                      className="w-full resize-y rounded-lg border-none bg-surface-container-high py-3 px-4 font-mono text-xs text-on-surface focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <h3 className="mb-4 flex items-center gap-2 border-b border-outline-variant/10 pb-2 text-sm font-bold uppercase tracking-widest text-on-surface">
+                    <span className="material-symbols-outlined text-sm">policy</span>
+                    Policy flags
+                  </h3>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {POLICY_CHECKS.map(({ key, label, sub }) => (
+                      <label
+                        key={key}
+                        className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-surface-container-low p-4 transition-colors hover:bg-surface-container-high"
+                      >
+                        <div>
+                          <span className="block text-xs font-semibold text-on-surface">{label}</span>
+                          <span className="text-[9px] uppercase text-on-surface-variant">{sub}</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(policy[key])}
+                          onChange={(e) =>
+                            setPolicy((p) => ({ ...p, [key]: e.target.checked }))
+                          }
+                          className="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-on-surface-variant">
+                        maxLossPercent
+                      </label>
+                      <input
+                        type="number"
+                        value={policy.maxLossPercent}
+                        onChange={(e) =>
+                          setPolicy((p) => ({ ...p, maxLossPercent: e.target.value }))
+                        }
+                        className="w-full rounded-lg border-none bg-surface-container-high py-2 px-3 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-on-surface-variant">
+                        minPostUsdcBalance
+                      </label>
+                      <input
+                        type="number"
+                        value={policy.minPostUsdcBalance}
+                        onChange={(e) =>
+                          setPolicy((p) => ({ ...p, minPostUsdcBalance: e.target.value }))
+                        }
+                        className="w-full rounded-lg border-none bg-surface-container-high py-2 px-3 text-sm"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-on-surface-variant">
+                        minPostTokenMint
+                      </label>
+                      <input
+                        value={policy.minPostTokenMint}
+                        onChange={(e) =>
+                          setPolicy((p) => ({ ...p, minPostTokenMint: e.target.value }))
+                        }
+                        className="w-full rounded-lg border-none bg-surface-container-high py-2 px-3 text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <textarea
+                  value={rawJson}
+                  onChange={(e) => setRawJson(e.target.value)}
+                  rows={22}
+                  className="w-full rounded-lg border-none bg-surface-container-high p-4 font-mono text-xs text-on-surface focus:ring-1 focus:ring-primary"
+                />
+              )}
+
+              <div className="mt-8 border-t border-outline-variant/10 pt-8">
+                <div className="mb-4 flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                    Quick fill
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["empty_tx", "Empty TX"],
+                      ["invalid_b64", "Invalid base64"],
+                      ["random_b64", "Random base64"],
+                      ["missing_fields", "Missing fields"],
+                      ["strict_sim", "Strict sim"],
+                      ["permissive", "Permissive"],
+                    ] as const
+                  ).map(([id, lab]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => applyPreset(id)}
+                      className="rounded-lg border border-outline-variant/10 bg-surface-container-high px-3 py-1.5 text-[10px] font-bold text-[#a3aac4] transition-all hover:bg-surface-container-highest"
+                    >
+                      {lab}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={loading !== null}
+                    onClick={generateUnsignedDevnetTx}
+                    className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-1.5 text-[10px] font-bold text-primary transition-all hover:bg-primary/20 disabled:opacity-40"
+                  >
+                    Sample devnet tx
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={loading !== null}
+                onClick={runAnalyze}
+                className="mt-8 flex w-full items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-primary-container to-primary py-4 font-bold text-on-primary shadow-[0_0_30px_rgba(143,245,255,0.15)] transition-all active:scale-[0.98] disabled:opacity-40"
+              >
+                <span className="material-symbols-outlined">send_and_archive</span>
+                Execute analysis
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col lg:col-span-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-on-surface">
+                <span className="material-symbols-outlined text-sm">terminal</span>
+                Response
+              </h3>
+              <div className="flex items-center gap-2">
+                {statusBadge}
+                <button
+                  type="button"
+                  onClick={copyOut}
+                  disabled={!analyzeOut}
+                  className="text-outline-variant hover:text-white disabled:opacity-30"
+                  aria-label="Copy response"
+                >
+                  <span className="material-symbols-outlined text-sm">content_copy</span>
+                </button>
+              </div>
+            </div>
+            <div className="flex min-h-[320px] flex-1 flex-col overflow-hidden rounded-2xl border-l-2 border-primary bg-surface-container-lowest shadow-2xl lg:min-h-[480px]">
+              <div className="flex items-center gap-4 border-b border-outline-variant/10 bg-surface-container-low px-4 py-2">
+                <div className="flex gap-1.5">
+                  <div className="h-2.5 w-2.5 rounded-full bg-red-500/50" />
+                  <div className="h-2.5 w-2.5 rounded-full bg-yellow-500/50" />
+                  <div className="h-2.5 w-2.5 rounded-full bg-green-500/50" />
+                </div>
+                <span className="font-mono text-[9px] uppercase tracking-tighter text-on-surface-variant">
+                  analyze_response.json
+                </span>
+              </div>
+              <pre className="custom-scrollbar flex-1 overflow-auto p-6 font-mono text-xs leading-relaxed text-[#8ff5ff]">
+                {analyzeOut || "// Send a request to see formatted JSON here."}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

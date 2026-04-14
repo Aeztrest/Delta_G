@@ -26,13 +26,13 @@ export function MermaidBlock({ chart, caption }: Props) {
           theme: "dark",
           securityLevel: "strict",
           themeVariables: {
-            primaryColor: "#2d4a7a",
-            primaryTextColor: "#e8edf5",
-            primaryBorderColor: "#5b9cff",
-            lineColor: "#8b98ab",
-            secondaryColor: "#1a2130",
-            tertiaryColor: "#121722",
-            fontFamily: "DM Sans, system-ui, sans-serif",
+            primaryColor: "#192540",
+            primaryTextColor: "#dee5ff",
+            primaryBorderColor: "#8ff5ff",
+            lineColor: "#a3aac4",
+            secondaryColor: "#0f1930",
+            tertiaryColor: "#060e20",
+            fontFamily: "Inter, system-ui, sans-serif",
           },
         });
         const id = `deltag-mermaid-${reactId}-${Math.random().toString(36).slice(2, 9)}`;
@@ -53,10 +53,17 @@ export function MermaidBlock({ chart, caption }: Props) {
   }, [chart, reactId]);
 
   return (
-    <figure className="mermaid-block">
-      {caption ? <figcaption>{caption}</figcaption> : null}
-      <div className="mermaid-inner" ref={containerRef} role="img" aria-label={caption ?? "Diyagram"} />
-      {err ? <p className="mermaid-error">Diyagram yüklenemedi: {err}</p> : null}
+    <figure className="my-2">
+      {caption ? (
+        <figcaption className="mb-2 text-sm text-on-surface-variant">{caption}</figcaption>
+      ) : null}
+      <div
+        className="custom-scrollbar overflow-auto rounded-xl border border-outline-variant/20 bg-[#060e20] p-4 text-center"
+        ref={containerRef}
+        role="img"
+        aria-label={caption ?? "Diagram"}
+      />
+      {err ? <p className="mt-2 text-sm text-error">Diagram error: {err}</p> : null}
     </figure>
   );
 }

@@ -41,11 +41,18 @@ export function evaluatePolicy(input: PolicyEvaluationInput): Decision {
   } = input;
 
   const reasons: string[] = [];
+  const infoReasons: string[] = [];
   const extraPolicyFindings: RiskFinding[] = [];
 
   const requireOkSim = policy.requireSuccessfulSimulation !== false;
-  if (requireOkSim && simulation.status === "failed") {
-    reasons.push("Simulation did not succeed; blocking under policy");
+  if (simulation.status === "failed") {
+    if (requireOkSim) {
+      reasons.push("Simulation did not succeed; blocking under policy");
+    } else {
+      infoReasons.push(
+        "Simulation did not succeed, but policy does not require successful simulation — allowed",
+      );
+    }
   }
 
   if (policy.blockRiskyPrograms && hasCode(riskFindings, "RISKY_PROGRAM_INTERACTION")) {
@@ -169,9 +176,11 @@ export function evaluatePolicy(input: PolicyEvaluationInput): Decision {
     integratorRequestId,
   };
 
+  const allReasons = [...reasons, ...infoReasons];
+
   return {
     safe: !blocked,
-    reasons: dedupeStrings(reasons),
+    reasons: dedupeStrings(allReasons),
     estimatedChanges,
     riskFindings: mergedFindings,
     simulationWarnings,

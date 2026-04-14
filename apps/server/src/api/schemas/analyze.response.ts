@@ -51,6 +51,34 @@ export const analyzeResponseSchema = z.object({
   }),
   riskFindings: z.array(riskFindingResponseSchema),
   simulationWarnings: z.array(z.string()),
+  annotation: z.object({
+    summary: z.object({
+      instructions: z.array(z.object({
+        programId: z.string(),
+        programName: z.string(),
+        action: z.string(),
+        description: z.string(),
+        details: z.record(z.unknown()).optional(),
+      })),
+      humanReadable: z.string(),
+      primaryAction: z.string(),
+      involvedPrograms: z.array(z.string()),
+    }),
+    cpiTrace: z.object({
+      roots: z.array(z.unknown()),
+      allProgramIds: z.array(z.string()),
+      maxDepth: z.number(),
+      totalInstructions: z.number(),
+    }),
+  }).optional(),
+  suggestions: z.array(z.object({
+    id: z.string(),
+    severity: z.enum(["info", "warning", "critical"]),
+    category: z.string(),
+    title: z.string(),
+    description: z.string(),
+    autoFixAvailable: z.boolean(),
+  })).optional(),
   meta: z.object({
     analysisVersion: z.string(),
     cluster: z.enum(["mainnet-beta", "devnet", "testnet"]),

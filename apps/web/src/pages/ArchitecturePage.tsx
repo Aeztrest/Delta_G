@@ -2,20 +2,20 @@ import { MermaidBlock } from "../components/MermaidBlock.js";
 
 const DIAG_DEPLOY = `
 flowchart TB
-  subgraph client["Tarayıcı"]
-    UI["React demo arayüzü"]
+  subgraph client["Browser"]
+    UI["React demo UI"]
   end
-  subgraph edge["Sunucu kenarı"]
-    NX["Nginx<br/>statik dosya + proxy"]
+  subgraph edge["Edge"]
+    NX["Nginx<br/>static + proxy"]
   end
-  subgraph api["API konteyneri"]
-    FY["Fastify<br/>HTTP sunucusu"]
+  subgraph api["API container"]
+    FY["Fastify"]
     RL["Rate limit"]
-    AUTH["API key kancası"]
+    AUTH["API key"]
     X402["x402 preHandler"]
     RT["POST /v1/analyze"]
   end
-  subgraph chain["Dış servisler"]
+  subgraph chain["External"]
     RPC["Solana RPC"]
     FAC["x402 facilitator"]
   end
@@ -31,171 +31,267 @@ flowchart TB
 
 const DIAG_ANALYZE_SEQ = `
 sequenceDiagram
-  participant C as İstemci
+  participant C as Client
   participant F as Fastify
   participant X as x402
   participant A as Analyze
   participant R as Solana RPC
-  participant P as Policy motoru
+  participant P as Policy engine
   C->>F: POST /v1/analyze + body
   F->>F: Rate limit, API key
-  F->>X: Ödeme doğrula (açıksa)
-  alt Ödeme yok / hatalı
-    X-->>C: 402 veya hata
+  F->>X: Payment verify (if enabled)
+  alt Missing / invalid payment
+    X-->>C: 402 or error
   end
-  X->>A: İşleme devam
+  X->>A: Continue
   A->>R: getMultipleAccounts + simulate
-  R-->>A: Hesap + sim sonucu
-  A->>P: Risk + kurallar
+  R-->>A: Accounts + sim result
+  A->>P: Risk + rules
   P-->>A: Decision JSON
-  A->>A: Zod ile yanıt doğrula
-  A->>X: Settlement (başarılıysa)
+  A->>A: Zod validate response
+  A->>X: Settlement (if x402)
   A-->>C: 200 + safe/reasons
 `;
 
 const DIAG_PIPELINE = `
 flowchart TB
   IN["Base64 VersionedTransaction"]
-  D["Çözümleme<br/>wire format"]
-  K["Statik hesap anahtarları"]
-  PF["Ön-fetch<br/>getMultipleAccountsInfo"]
-  SIM["simulateTransaction<br/>sigVerify: false"]
-  NORM["Normalizasyon<br/>loglar, hesaplar"]
-  DEL["Delta çıkarımı<br/>SOL / SPL / onaylar"]
-  RISK["Risk bulguları<br/>program / truncation"]
-  POL["Policy değerlendirme<br/>deterministik"]
-  OUT["Decision<br/>safe, reasons, meta"]
+  D["Decode"]
+  K["Static account keys"]
+  PF["Pre-fetch accounts"]
+  SIM["simulateTransaction"]
+  NORM["Normalize"]
+  DEL["Delta extraction"]
+  RISK["Risk findings"]
+  POL["Policy engine"]
+  OUT["Decision JSON"]
   IN --> D --> K --> PF --> SIM --> NORM --> DEL --> RISK --> POL --> OUT
 `;
 
-const COMPONENTS: {
-  name: string;
-  role: string;
-  why: string;
-}[] = [
-  {
-    name: "Fastify",
-    role: "Node.js HTTP çatısı",
-    why: "Düşük gecikme, plugin modeli (rate limit, raw body), üretimde olgun. İstek kimliği ve timeout tek yerden yönetilir.",
-  },
-  {
-    name: "Zod",
-    role: "İstek ve yanıt şemaları",
-    why: "Çalışma anında doğrulama: hatalı JSON veya sürüm kayması erken yakalanır; yanıt şekli sözleşmeye bağlanır.",
-  },
-  {
-    name: "@solana/web3.js · Connection",
-    role: "RPC istemcisi",
-    why: "Resmi benzeri API ile getMultipleAccountsInfo ve simulateTransaction çağrıları; timeout’lu fetch ve tek seferlik timeout retry ile dayanıklılık.",
-  },
-  {
-    name: "Simülasyon + normalizasyon",
-    role: "Zincir öncesi görünürlük",
-    why: "İşlem yürütülmeden hesap durumu ve loglar toplanır; farklı RPC cevapları tek iç modele indirgenir.",
-  },
-  {
-    name: "Analiz katmanı",
-    role: "SOL/SPL tahmini, onay/delege",
-    why: "Kullanıcı cüzdanı bağlamında anlamlı özet üretmek için ham simülasyon verisinden iş kuralı çıkarımı.",
-  },
-  {
-    name: "Risk + policy",
-    role: "Bulgular ve karar",
-    why: "Risk sinyalleri açıklanabilir; policy aynı girdide her zaman aynı çıktıyı verir (denetim ve entegrasyon için uygun).",
-  },
-  {
-    name: "x402 (@x402/core + @x402/svm)",
-    role: "HTTP 402 ödeme",
-    why: "Kaynak başına ücret: önce doğrulama, analiz sonrası settlement; facilitator ile zincir üstü ödeme akışı standartlaşır.",
-  },
-  {
-    name: "Pino / structured logging",
-    role: "Loglama",
-    why: "Üretimde aranabilir olaylar; hassas başlıklar redakte edilir.",
-  },
-  {
-    name: "@fastify/rate-limit",
-    role: "Kötüye kullanım sınırı",
-    why: "RPC ve CPU maliyetini sınırlar; ters proxy arkasında trustProxy ile istemci IP’si kullanılabilir.",
-  },
-  {
-    name: "Nginx (Docker web)",
-    role: "Statik UI + reverse proxy",
-    why: "Tek origin: tarayıcı CORS ile uğraşmaz; /v1 ve /health API konteynerine iletilir.",
-  },
-  {
-    name: "Docker Compose",
-    role: "api + web",
-    why: "Aynı ağda servis keşfi, sağlık kontrolü ile web’in API hazır olana kadar beklemesi, tutarlı dağıtım.",
-  },
-  {
-    name: "React (Vite)",
-    role: "Demo arayüzü",
-    why: "Jüri ve entegratör için canlı senaryolar; gerçek ürün bu API’yi kendi istemcisinden çağırır.",
-  },
+const MODULE_ROWS: { module: string; tech: string }[] = [
+  { module: "Web server", tech: "Fastify" },
+  { module: "Validation", tech: "Zod" },
+  { module: "Solana client", tech: "@solana/web3.js" },
+  { module: "Simulation", tech: "RPC simulate + normalize" },
+  { module: "Logic", tech: "Risk + policy engine" },
+  { module: "Optional paywall", tech: "x402 (@x402/core)" },
+  { module: "Edge (Docker web)", tech: "Nginx" },
+  { module: "Runtime", tech: "Docker Compose" },
 ];
 
 export function ArchitecturePage() {
   return (
-    <div className="arch-page">
-      <header className="page-head">
-        <h1>Mimari ve teknik akış</h1>
-        <p className="lede">
-          DeltaGuard’ın parçaları, verinin hangi sırayla aktığı ve her bileşenin neden seçildiği — diyagramlar ve
-          kısa sözlük.
+    <div className="mx-auto max-w-6xl p-6 md:p-12">
+      <header className="mb-12">
+        <h1 className="mb-4 font-headline text-4xl font-bold tracking-tighter text-on-surface md:text-5xl">
+          Architecture &amp; workflow
+        </h1>
+        <p className="max-w-2xl text-lg text-on-surface-variant">
+          How the demo is deployed, how a request moves through Fastify, and how analysis is pipelined before a
+          schema-validated JSON response is returned.
         </p>
       </header>
 
-      <section className="card arch-section">
-        <h2 className="card-title">Dağıtım görünümü</h2>
-        <p className="arch-p">
-          Tarayıcı önce Nginx’ten React statik dosyalarını alır. API çağrıları aynı host altında{" "}
-          <code>/v1</code> ve <code>/health</code> yollarıyla proxy edilir; böylece tarayıcıda CORS karmaşası olmaz.
+      <section className="mb-16">
+        <div className="mb-8 flex items-center gap-3">
+          <span className="h-[1px] w-8 bg-primary" />
+          <h2 className="font-headline text-2xl font-bold tracking-tight text-primary">Deployment workflow</h2>
+        </div>
+        <p className="mb-6 max-w-3xl text-on-surface-variant">
+          Browser loads static assets from Nginx; <code className="text-primary/90">/v1</code> and{" "}
+          <code className="text-primary/90">/health</code> reverse-proxy to the API container (same origin, no
+          CORS friction).
         </p>
-        <MermaidBlock chart={DIAG_DEPLOY} caption="Docker tabanlı demo topolojisi" />
-      </section>
-
-      <section className="card arch-section">
-        <h2 className="card-title">İstek sırası: POST /v1/analyze</h2>
-        <p className="arch-p">
-          Önce güvenlik ve maliyet sınırları, isteğe bağlı ödeme doğrulaması, ardından analiz ve yanıtın şema ile
-          doğrulanması. x402 açıksa settlement yalnızca geçerli yanıt onayından sonra çalışır.
-        </p>
-        <MermaidBlock chart={DIAG_ANALYZE_SEQ} caption="Uçtan uca mesaj sırası (özet)" />
-      </section>
-
-      <section className="card arch-section">
-        <h2 className="card-title">Analiz boru hattı</h2>
-        <p className="arch-p">
-          İşlem çözümlenir, sınırlı sayıda hesap için ön durum okunur, simülasyon çalıştırılır; çıktı politika
-          motoruna düz bir <code>Decision</code> nesnesi olarak gider.
-        </p>
-        <MermaidBlock chart={DIAG_PIPELINE} caption="Sunucu içi işlem adımları" />
-      </section>
-
-      <section className="card arch-section">
-        <h2 className="card-title">Bileşen sözlüğü</h2>
-        <p className="arch-p">
-          Her satır: <strong>ne</strong> (rol) ve <strong>neden</strong> (tasarım gerekçesi).
-        </p>
-        <div className="component-grid">
-          {COMPONENTS.map((c) => (
-            <article key={c.name} className="component-card">
-              <h3>{c.name}</h3>
-              <p className="component-role">{c.role}</p>
-              <p className="component-why">{c.why}</p>
-            </article>
+        <div className="mb-10 grid grid-cols-1 gap-4 md:grid-cols-4">
+          {(
+            [
+              ["Entry", "devices", "Client"],
+              ["Proxy", "dns", "Nginx"],
+              ["Core API", "bolt", "Fastify"],
+              ["Chain", "hub", "Solana RPC"],
+            ] as const
+          ).map(([label, icon, title], i) => (
+            <div
+              key={label}
+              className={`relative z-10 rounded-xl border border-outline-variant/10 bg-surface-container p-6 transition-all hover:border-primary/30 ${
+                i === 2 ? "border-primary/20 shadow-[0_0_20px_rgba(143,245,255,0.05)]" : ""
+              }`}
+            >
+              <div className="mb-4 text-[10px] font-bold uppercase tracking-[0.2em] text-on-surface-variant">
+                {label}
+              </div>
+              <div className="flex flex-col items-center gap-4">
+                <span className="material-symbols-outlined text-4xl text-primary">{icon}</span>
+                <span className="font-headline text-lg font-bold">{title}</span>
+              </div>
+            </div>
           ))}
+        </div>
+        <div className="rounded-2xl border border-outline-variant/10 bg-surface-container-low p-4 md:p-6">
+          <MermaidBlock chart={DIAG_DEPLOY} caption="Docker-style topology (conceptual)" />
         </div>
       </section>
 
-      <section className="card arch-section arch-note">
-        <h2 className="card-title">Sınırlar (kısa)</h2>
-        <ul className="arch-list">
-          <li>Simülasyon, gerçek yürütmeyi garanti etmez; ağ ve blockhash farkları olabilir.</li>
-          <li>Hesap listesi üst sınırı (ör. 64) nedeniyle çok hesaplı işlemlerde kısmi görünürlük.</li>
-          <li>x402 tam ödeme akışı üretim cüzdanı + facilitator ile yapılır; demo UI ödeme imzalamaz.</li>
-        </ul>
+      <section className="mb-16">
+        <div className="mb-8 flex items-center gap-3">
+          <span className="h-[1px] w-8 bg-primary" />
+          <h2 className="font-headline text-2xl font-bold tracking-tight text-primary">Request sequence</h2>
+        </div>
+        <div className="mb-8 overflow-hidden rounded-2xl bg-surface-container-low">
+          <div className="grid grid-cols-2 border-b border-outline-variant/10 sm:grid-cols-4 lg:grid-cols-7">
+            {(
+              [
+                "Rate limit",
+                "API key",
+                "x402",
+                "Analyze",
+                "RPC",
+                "Policy",
+                "Response",
+              ] as const
+            ).map((step, idx) => (
+              <div
+                key={step}
+                className={`border-b border-outline-variant/10 p-4 text-center last:border-b-0 sm:border-b-0 lg:border-r lg:last:border-r-0 ${
+                  idx % 2 === 0 ? "bg-surface-container-highest/20" : ""
+                } ${idx === 6 ? "bg-primary/10" : ""}`}
+              >
+                <div className="mb-2 text-[9px] font-bold uppercase tracking-widest text-on-surface-variant">
+                  Step {String(idx + 1).padStart(2, "0")}
+                </div>
+                <div
+                  className={`font-headline text-sm font-bold ${idx === 2 ? "text-tertiary" : ""} ${idx === 6 ? "text-primary" : ""}`}
+                >
+                  {step}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="p-6 md:p-10">
+            <MermaidBlock chart={DIAG_ANALYZE_SEQ} caption="End-to-end message flow (summary)" />
+          </div>
+        </div>
+      </section>
+
+      <div className="mb-16 grid grid-cols-1 gap-8 lg:grid-cols-3">
+        <div className="space-y-8 lg:col-span-2">
+          <div className="flex items-center gap-3">
+            <span className="h-[1px] w-8 bg-primary" />
+            <h2 className="font-headline text-2xl font-bold tracking-tight text-primary">Analysis pipeline</h2>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-xl border border-outline-variant/10 bg-surface-container p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-primary">data_object</span>
+                <h4 className="font-headline font-bold">TX decode</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-on-surface-variant">
+                VersionedTransaction wire bytes from base64; static account keys extracted.
+              </p>
+            </div>
+            <div className="rounded-xl border border-outline-variant/10 bg-surface-container p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-primary">cloud_download</span>
+                <h4 className="font-headline font-bold">Pre-fetch</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-on-surface-variant">
+                Bounded <code className="text-primary/80">getMultipleAccounts</code> before simulation.
+              </p>
+            </div>
+            <div className="rounded-xl border border-primary/10 bg-surface-container-high p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-primary">model_training</span>
+                <h4 className="font-headline font-bold">Simulate</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-on-surface-variant">
+                <code className="text-primary/80">simulateTransaction</code> with{" "}
+                <code className="text-primary/80">sigVerify: false</code> for unsigned demo txs.
+              </p>
+            </div>
+            <div className="rounded-xl border border-outline-variant/10 bg-surface-container p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-primary">straighten</span>
+                <h4 className="font-headline font-bold">Normalize</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-on-surface-variant">
+                RPC-specific shapes mapped to an internal normalized simulation model.
+              </p>
+            </div>
+            <div className="col-span-2 border-l-2 border-primary bg-surface-container-lowest p-8">
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div>
+                  <h4 className="mb-2 font-headline text-lg font-bold text-primary">Deltas + risk + policy</h4>
+                  <p className="text-sm text-on-surface-variant">
+                    Heuristic SOL/SPL deltas, risk detectors, deterministic policy →{" "}
+                    <code className="text-primary/80">safe</code> + reasons.
+                  </p>
+                </div>
+                <span className="material-symbols-outlined text-3xl text-primary">analytics</span>
+              </div>
+              <div className="rounded-xl border border-outline-variant/10 bg-surface-container-low p-4">
+                <MermaidBlock chart={DIAG_PIPELINE} caption="Server-side pipeline" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-8">
+          <div className="flex items-center gap-3">
+            <span className="h-[1px] w-8 bg-primary" />
+            <h2 className="font-headline text-2xl font-bold tracking-tight text-primary">Module map</h2>
+          </div>
+          <div className="rounded-2xl border border-outline-variant/10 bg-surface-container p-2">
+            <table className="w-full border-collapse text-left">
+              <thead className="border-b border-outline-variant/10 text-[10px] uppercase tracking-widest text-on-surface-variant">
+                <tr>
+                  <th className="p-4 font-bold">Module</th>
+                  <th className="p-4 font-bold">Technology</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {MODULE_ROWS.map((row) => (
+                  <tr
+                    key={row.module}
+                    className="transition-colors hover:bg-surface-container-high"
+                  >
+                    <td className="p-4 font-bold text-on-surface">{row.module}</td>
+                    <td className="p-4 font-mono text-xs text-primary/80">{row.tech}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <section className="max-w-4xl">
+        <div className="mb-8 flex items-center gap-3">
+          <span className="h-[1px] w-8 bg-error" />
+          <h2 className="font-headline text-2xl font-bold tracking-tight text-error">System limitations</h2>
+        </div>
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+          <div className="rounded-xl border-t border-error/20 bg-surface-container-low p-6">
+            <h5 className="mb-2 font-headline font-bold">Simulate ≠ execution</h5>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              Snapshot simulation can diverge from final on-chain execution.
+            </p>
+          </div>
+          <div className="rounded-xl border-t border-error/20 bg-surface-container-low p-6">
+            <h5 className="mb-2 font-headline font-bold">Account limits</h5>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              Large account sets may be truncated or rejected; see server docs.
+            </p>
+          </div>
+          <div className="rounded-xl border-t border-error/20 bg-surface-container-low p-6">
+            <h5 className="mb-2 font-headline font-bold">x402 optionality</h5>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              Payment flow requires facilitator + wallet; demo UI does not sign payments.
+            </p>
+          </div>
+        </div>
+        <p className="mt-6 text-sm text-on-surface-variant">
+          Full list: <code className="text-primary/90">LIMITATIONS.md</code> in the repository root.
+        </p>
       </section>
     </div>
   );
